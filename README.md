@@ -37,7 +37,7 @@ entirety.
     </tr>
     <tr>
         <td>factor</td>
-        <td>INT|FACTOR</br>(PLUS|MINUS) factor</br>LPAREN expression RPAREN</td>
+        <td>INT|FLOAT</br>(PLUS|MINUS) factor</br>LPAREN expression RPAREN</td>
     </tr>
     
 </table>
