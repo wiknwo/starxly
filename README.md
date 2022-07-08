@@ -9,7 +9,7 @@ a simple grammar that defines the language.
 - Simple syntax
 - Supports floating point and integer numbers
 - Additon: ```1 + 2 = 3```
-- Subtraction: ```1 - 2 = 1```
+- Subtraction: ```1 - 2 = -1```
 - Multiplication: ```1 * 2 = 2```
 - Division: ```1 / 2 = 0.5```
 - Unary Operators: ```-1 + 2 = 1```
