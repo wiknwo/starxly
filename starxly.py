@@ -28,6 +28,28 @@ class InvalidSyntaxError(Error):
     def __init__(self, position_start, position_end, details):
         super().__init__(position_start, position_end, 'Invalid Syntax', details)
 
+class RunTimeError(Error):
+    """Defining error representing run time error"""
+    def __init__(self, position_start, position_end, details, context):
+        super().__init__(position_start, position_end, 'Runtime Error', details)
+        self.context = context
+
+    def __str__(self):
+        result = self.generate_traceback()
+        result += '{}:{}\n'.format(self.error_name, self.details)
+        result += indicate_error(self.position_start.filetext, self.position_start, self.position_end)
+        return result
+
+    def generate_traceback(self):
+        result = ''
+        position = self.position_start
+        context = self.context
+        while context:
+            result += 'File {}, Line {}, in {}\n'.format(position.filename, position.line_number, context.display_name) + result
+            position = context.parent_entry_position
+            context = context.parent
+        return 'Traceback (most recent call last):\n' + result    
+
 class Position:
     """Class representing our current location in the starxly source file"""
     def __init__(self, index, line_number, column_number, filename, filetext):
@@ -156,6 +178,8 @@ class NumberNode:
     """Node in AST representing a number"""
     def __init__(self, token):
         self.token = token
+        self.position_start = self.token.position_start
+        self.position_end = self.token.position_end
 
     def __repr__(self):
         return '{}'.format(self.token)
@@ -166,6 +190,8 @@ class BinaryOperatorNode:
         self.left_node = left_node
         self.operator_token = operator_token
         self.right_node = right_node
+        self.position_start = self.left_node.position_start
+        self.position_end = self.right_node.position_end
 
     def __repr__(self):
         return '({}, {}, {})'.format(self.left_node, self.operator_token, self.right_node)
@@ -175,6 +201,8 @@ class UnaryOperatorNode:
     def __init__(self, operator_token, node):
         self.operator_token = operator_token
         self.node = node
+        self.position_start = self.operator_token.position_start
+        self.position_end = self.node.position_end
 
     def __repr__(self):
         return '({}, {})'.format(self.operator_token, self.node)
@@ -251,7 +279,7 @@ class Parser:
             factor = result.register(self.extract_factor())
             if result.error:
                 return result
-            return result.success(UnaryOperatorNode(token, factor))
+            return result.success(UnaryOperatorNode(token, factor.node))
 
         elif token.type == Token.TT_INT or token.type == Token.TT_FLOAT:
             result.register(self.advance())
@@ -264,7 +292,7 @@ class Parser:
                 return result
             if self.current_token.type == Token.TT_RPAREN:
                 result.register(self.advance())
-                return result.success(expression)
+                return result.success(expression.node)
             else:
                 return result.failure(InvalidSyntaxError(self.current_token.position_start, self.current_token.position_end, "Expected ')'"))
         return result.failure(InvalidSyntaxError(token.position_start, token.position_end, 'Expected int of float'))
@@ -289,9 +317,134 @@ class Parser:
             result.register(self.advance())
             right = result.register(function())
             if result.error:
-                result
-            left = BinaryOperatorNode(left, operator_token, right)
+                return result
+            if isinstance(left, BinaryOperatorNode):
+                left = result.success(left)
+            left = BinaryOperatorNode(left.node, operator_token, right.node)
+        if isinstance(left, ParseResult):
+            return result.success(left.node)
         return result.success(left)
+
+class RunTimeResult:
+    """Class to keep track of the current result and error if there is any"""
+    def __init__(self):
+        self.value = None
+        self.error = None
+
+    def register(self, result):
+        if result.error:
+            self.error = result.error
+        return result.value
+
+    def success(self, value):
+        self.value = value
+        return self
+    
+    def failure(self, error):
+        self.error = error
+        return self
+    
+class Number:
+    """Class for storing numbers and operating on them with other numbers"""
+    def __init__(self, value):
+        self.value = value
+        self.set_position()
+        self.set_context()
+
+    def set_position(self, position_start=None, position_end=None):
+        """Sets position of number so that we can return errors exactly where they occur"""
+        self.position_start = position_start
+        self.position_end = position_end
+        return self
+
+    def set_context(self, context=None):
+        """Sets current context of program for traceback of error origins"""
+        self.context = context
+        return self
+
+    def add(self, other):
+        """Adds other number to this number"""
+        if isinstance(other, Number):
+            return Number(self.value + other.value).set_context(self.context), None
+
+    def subtract(self, other):
+        """Subtracts other number from this number"""
+        if isinstance(other, Number):
+            return Number(self.value - other.value).set_context(self.context), None
+
+    def multiply(self, other):
+        """Subtracts other number from this number"""
+        if isinstance(other, Number):
+            return Number(self.value * other.value).set_context(self.context), None
+
+    def divide(self, other):
+        """Subtracts other number from this number"""
+        if isinstance(other, Number):
+            if other.value == 0:
+                return None, RunTimeError(other.position_start, other.position_end, 'Division by zero', self.context)
+            return Number(self.value / other.value).set_context(self.context), None
+
+    def __repr__(self):
+        return str(self.value)
+
+class Context:
+    """Class to show traceback of errors and provide more context on error origins"""
+    def __init__(self, display_name, parent=None, parent_entry_position=None):
+        self.display_name = display_name
+        self.parent = parent
+        self.parent_entry_position = parent_entry_position
+
+
+class Interpreter:
+    """
+    The interpreter traverses through the AST, looks at the 
+    different node types and determines the code to be 
+    executed.
+    """
+    def visit(self, node, context):
+        """Processes given node and visits all its cihldren"""
+        method_name = 'visit_{}'.format(type(node).__name__)
+        method_call = getattr(self, method_name, self.no_visit_method)
+        return method_call(node, context)
+
+    def no_visit_method(self, node, context):
+        """Raises exception when visit method does not exist"""
+        raise Exception('No visit_{} method defined'.format(type(node).__name__))
+    
+    def visit_NumberNode(self, node, context):
+        print('Found number node!')
+        return RunTimeResult().success(Number(node.token.value).set_context(context).set_position(node.position_start, node.position_end))
+
+    def visit_BinaryOperatorNode(self, node, context):
+        print('Found binary operator node!')
+        response = RunTimeResult()
+        left = response.register(self.visit(node.left_node, context))
+        if response.error: 
+            return response
+        right = response.register(self.visit(node.right_node, context))
+        if response.error:
+            return response
+        result = None
+        if node.operator_token.type == Token.TT_PLUS:
+            result, error = left.add(right)
+        elif node.operator_token.type == Token.TT_MINUS:
+            result, error = left.subtract(right)
+        elif node.operator_token.type == Token.TT_MUL:
+            result, error = left.multiply(right)
+        elif node.operator_token.type == Token.TT_DIV:
+            result, error = left.divide(right)
+        return response.failure(error) if error else response.success(result.set_position(node.position_start, node.position_end))
+
+    def visit_UnaryOperatorNode(self, node, context):
+        print('Found unary operator node')
+        response = RunTimeResult()
+        number = response.register(self.visit(node.node, context))
+        if response.error:
+            return response
+        error = None
+        if node.operator_token.type == Token.TT_MINUS:
+            number, error = number.multiply(Number(-1))
+        return response.failure(error) if error else response.success(number.set_position(node.position_start, node.position_end))
 
 def run(filename, text):
     """Function to run the lexer on some text"""
@@ -303,5 +456,11 @@ def run(filename, text):
     # Generate AST
     parser = Parser(tokens)
     abstract_syntax_tree = parser.parse()
-    # AST, Error
-    return abstract_syntax_tree.node, abstract_syntax_tree.error
+    if abstract_syntax_tree.error:
+        return None, abstract_syntax_tree.error
+    # Run program
+    interpreter = Interpreter()
+    context = Context('<program>') # Defining our initial root context
+    result = interpreter.visit(abstract_syntax_tree.node, context)
+    # result, error
+    return result.value, result.error
